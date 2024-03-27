@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CORS Demo</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js" integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA==" crossorigin="anonymous"></script>
+    <style>
+        html, body, .commands, .output { height: 99%}
+        body {font-family: Verdana, sans-serif;}
+        .commands, .output {width: 50%}
+        .commands {overflow: auto; left: 0; top: 0}
+        .commands .example {border: 1px solid #aaa; margin: 5px; padding: 2px; background-color: #eee;}
+        .output {top: 0; position: fixed; left: 50%; padding-left: 3px}
+        .output textarea {width: 95%}
+        .commands .example.lastrun {background-color: lightblue;}
+        .commands div:last-child {margin-bottom: 75px;}
+        input:checked ~ #js_output {display: none;}
+    </style>
+</head>
+<script type="text/javascript">
+    const API_SERVER="https://cors.local:5000";
+    var socket = io(API_SERVER.replace(/^http/,"ws"));
+    socket.on('connect', function() {
+        console.log("connected")
+    });
+    socket.on('server', function(x) {
+        document.getElementById("server_output").value += JSON.stringify(x, null, 2)
+    })
+
+    function getFormData() {
+        const formData  = new FormData();
+        formData.append("name", document.getElementById("name").value)
+        formData.append("secret", document.getElementById("secret").value)
+        return formData
+    }
+
+    const scenarios = {
+        "jsget": {
+            "url": API_SERVER + '/image'
+        },
+        "jsgetnocors": {
+            "url": API_SERVER + '/image',
+            "options": {"mode": 'no-cors'}
+        },
+        "jsgetcors": {
+            "url": API_SERVER + '/image-cors',
+        },
+        "jspost": {
+            "url": API_SERVER + '/action',
+            "options": {"method": 'POST', "body": getFormData}
+        },
+        "jspostcors": {
+            "url": API_SERVER + '/action-cors',
+            "options": {"method": 'POST', "body": getFormData}
+        },
+        "jspostcred": {
+            "url": API_SERVER + '/action',
+            "options": {"method": 'POST', "body": getFormData, "credentials": "include"}
+        },
+        "jspostcorsnocred": {
+            "url": API_SERVER + '/action-cors',
+            "options": {"method": 'POST', "body": getFormData, "credentials": "include"}
+        },
+        "jspostcorscred": {
+            "url": API_SERVER + '/action-cors-cred',
+            "options": {"method": 'POST', "body": getFormData, "credentials": "include"}
+        },
+        "jspostcorsallcred": {
+            "url": API_SERVER + '/action-cors-all-cred',
+            "options": {"method": 'POST', "body": getFormData, "credentials": "include"}
+        },
+        "jspostauth": {
+            "url": API_SERVER + '/action-cors',
+            "options": {"method": 'POST', "body": getFormData, "headers": {"Authorization": "TOKEN"}}
+        },
+        "jspostauthcredblocked": {
+            "url": API_SERVER + '/action-cors',
+            "options": {"method": 'POST', "body": getFormData, "headers": {"Authorization": "TOKEN"}, "credentials": "include"}
+        },
+        "jspostauthcred": {
+            "url": API_SERVER + '/action-cors-cred',
+            "options": {"method": 'POST', "body": getFormData, "headers": {"Authorization": "TOKEN"}, "credentials": "include"}
+        },
+        "jspostotherheader": {
+            "url": API_SERVER + '/action-cors',
+            "options": {"method": 'POST', "body": getFormData, "headers": {"HAL-TOKEN": "TOKEN"}}
+        }
+    }
+
+    async function fetchwrap(url, options) {
+        let opts = {...options}
+        try {
+            if (opts.body && opts.body instanceof Function) {
+                opts.body = opts.body()
+            }
+            const rawResponse = await fetch(url, opts);
+            if (rawResponse.headers.get("Content-Type") == "image/jpeg") {
+                const content = await rawResponse.arrayBuffer();
+                log(Array.from(new Uint8Array(content.slice(0, 20))));
+            } else {
+                const content = await rawResponse.text();
+                log(content);
+            }
+        } catch (e) {
+            logerror(e)
+        }
+    }
+
+    function flatJSON(x) {
+        if (typeof x == "object") {
+            const parts = Object.keys(x).map(k => `${k}: ${flatJSON(x[k])}`)
+            if (parts.map(x => x.length + 2).reduce((a,b) => a+b) > 25) {
+                return "{\n" + parts.map(x => "    " + x).join(",\n") + "\n}"
+            } else {
+                return "{" + parts.join(", ") + "}"
+            }
+            return "{" + parts.join(", ") + "}"
+        } if (x instanceof Function) {
+            return "{...}"
+        } else {
+            return JSON.stringify(x)
+        }
+    }
+
+    function describe(scenario) {
+        const settings = scenarios[scenario]
+        if (!scenarios[scenario].options) {
+            return `fetch('${settings.url}')`
+        } else {
+            return `fetch('${settings.url}', ${flatJSON(scenarios[scenario].options)})`
+        }
+    }
+
+    async function trigger(scenario, event) {
+        const x = scenarios[scenario];
+        resetUI()
+        highlightExample(event)
+        return await fetchwrap(x["url"], x["options"] || {})
+    }
+
+    function buildJSExample(scenario) {
+        const div = document.createElement("div")
+        div.classList.add("example")
+        const pre = document.createElement("pre")
+        pre.innerText = describe(scenario)
+        div.appendChild(pre)
+        const execute = document.createElement("button")
+        execute.innerText = "execute"
+        execute.dataset.function = scenario
+        execute.addEventListener('click', (e) => trigger(scenario, e))
+        div.appendChild(execute)
+        return div
+    }
+
+    function buildFormPostExample(props) {
+        const div = document.createElement("div")
+        div.classList.add("example")
+        const pre = document.createElement("pre")
+        pre.innerText = `POST ${props.url}`
+        div.appendChild(pre)
+        const form = document.createElement("form")
+        form.method = "post"
+        form.target = "dump"
+        form.action = props.url
+        const nameInput = document.createElement("input")
+        nameInput.type = "text"
+        nameInput.id = "name"
+        nameInput.name = "name"
+        nameInput.value = "jerry"
+        form.appendChild(nameInput)
+        form.appendChild(document.createTextNode(" "))
+        const secretInput = document.createElement("input")
+        secretInput.type = "text"
+        secretInput.id = "secret"
+        secretInput.name = "secret"
+        secretInput.value = "ostrich"
+        form.appendChild(secretInput)
+        form.appendChild(document.createTextNode(" "))
+        const execute = document.createElement("input")
+        execute.type = "submit"
+        execute.value = props.label || "execute"
+        execute.addEventListener('click', (e) => {resetUI(); highlightExample(e)})
+        form.appendChild(execute)
+        div.appendChild(form)
+        return div
+    }
+
+    function buildFormGetExample(props) {
+        const div = document.createElement("div")
+        div.classList.add("example")
+        const pre = document.createElement("pre")
+        pre.innerText = `GET ${props.url}`
+        div.appendChild(pre)
+        const form = document.createElement("form")
+        form.method = "get"
+        form.target = "dump"
+        form.action = props.url
+        const execute = document.createElement("input")
+        execute.type = "submit"
+        execute.value = props.label || "execute"
+        execute.addEventListener('click', (e) => {resetUI(); highlightExample(e)})
+        form.appendChild(execute)
+        div.appendChild(form)
+        return div
+    }
+
+    function buildImgExample(url) {
+        const div = document.createElement("div")
+        div.classList.add("example")
+        const pre = document.createElement("pre")
+        pre.innerText = `<img src="${url}" />`
+        div.appendChild(pre)
+        const img = document.createElement("img")
+        img.src = url
+        div.appendChild(img)
+        return div
+    }
+
+    function setup() {
+        const holder = document.getElementById("commands")
+        holder.appendChild(buildFormPostExample({url: API_SERVER + "/action", label: "submit"}))
+        holder.appendChild(buildFormGetExample({url: API_SERVER + "/set-cookie", label: "get cookie"}))
+        holder.appendChild(buildFormGetExample({url: API_SERVER + "/drop-cookie", label: "remove cookie"}))
+        holder.appendChild(buildImgExample(API_SERVER + "/image"))
+        for (const scenario in scenarios) {
+            holder.appendChild(buildJSExample(scenario))
+        }
+        holder.querySelector(".loading").remove()
+    }
+
+    function highlightExample(event) {
+        event.srcElement.closest(".example").classList.add("lastrun")
+    }
+
+    function resetUI() {
+        Array.from(document.querySelectorAll(".example")).forEach(x => {
+            x.classList.remove("lastrun")
+        })
+        document.getElementById("server_output").value = ""
+        document.getElementById("js_output").value = ""
+    }
+
+    function log(x) {
+        document.getElementById("js_output").value += JSON.stringify(x, null, 2)
+    }
+    function logerror(x) {
+        document.getElementById("js_output").value += "**ERROR**: " + x.toString()
+    }
+
+
+</script>
+<body onload="setup()">
+    <div class="commands" id="commands">
+        <h2>CORS Examples</h2>
+        <div class="loading">Loading examples...</div>
+    </div>
+    <div class="output">
+        <h3>Server Events</h3>
+        <textarea name="server_output" id="server_output" cols="30" rows="20"></textarea>
+        <h3>Fetch Results (body or error)</h3>
+        <input type="checkbox" id="hideresult"/><label for="hideresult">Hide result</label><br/>
+        <textarea name="js_output" id="js_output" cols="30" rows="10"></textarea>
+    </div>
+    <iframe name="dump" style="display:none;"></iframe>
+</body>
+</html>
+
